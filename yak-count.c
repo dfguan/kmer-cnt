@@ -516,7 +516,7 @@ int main(int argc, char *argv[])
 	yak_copt_t opt;
 	ketopt_t o = KETOPT_INIT;
 	yak_copt_init(&opt);
-	while ((c = ketopt(&o, argc, argv, 1, "k:p:K:t:b:H:", 0)) >= 0) {
+	while ((c = ketopt(&o, argc, argv, 1, "k:p:K:t:cb:H:", 0)) >= 0) {
 		if (c == 'k') opt.k = atoi(o.arg);
 		else if (c == 'p') opt.pre = atoi(o.arg);
 		else if (c == 'K') opt.chunk_size = atoi(o.arg);
