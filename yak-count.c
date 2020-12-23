@@ -1,3 +1,9 @@
+/**
+ * File              : yak-count.c
+ * Author            : lh3 
+ * Last Modified Date: 23.12.2020
+ * Last Modified By  : Dengfeng Guan <dfguan9@gmail.com>
+ */
 /*********************
  * Mostly from yak.h *
  *********************/
@@ -178,10 +184,12 @@ int yak_ch_insert_list(yak_ch_t *h, int create_new, int n, const uint64_t *a)
 
 int yak_ch_get(const yak_ch_t *h, uint64_t x)
 {
+	uint64_t x_mask = (1ULL<<h->k*2) - 1;
+	uint64_t y = yak_hash64(x, x_mask);	
 	int mask = (1<<h->pre) - 1;
-	yak_ht_t *g = h->h[x&mask].h;
+	yak_ht_t *g = h->h[y&mask].h;
 	khint_t k;
-	k = yak_ht_get(g, x >> h->pre << YAK_COUNTER_BITS);
+	k = yak_ht_get(g, y >> h->pre << YAK_COUNTER_BITS);
 	return k == kh_end(g)? -1 : kh_key(g, k)&YAK_MAX_COUNT;
 }
 
@@ -463,6 +471,33 @@ yak_ch_t *yak_count_file(const char *fn1, const char *fn2, const yak_copt_t *opt
 	return h;
 }
 
+int prnt_kcnt4seq(char *fa, const yak_ch_t *h, int k) // print k-mers in $seq to linear buffer $buf
+{
+	int i, l;
+	uint64_t x[2], mask = (1ULL<<k*2) - 1, shift = (k - 1) * 2;
+	gzFile fp;
+	if ((fp = gzopen(fa, "r")) == 0) return 0;
+	kseq_t *ks = kseq_init(fp);
+	while (kseq_read(ks) >= 0) {
+		int len = ks->seq.l;
+		char *seq = ks->seq.s;		
+		char *seqn = ks->name.s;
+		for (i = l = 0, x[0] = x[1] = 0; i < len; ++i) {
+			int c = seq_nt4_table[(uint8_t)seq[i]];
+			if (c < 4) { // not an "N" base
+				x[0] = (x[0] << 2 | c) & mask;                  // forward strand
+				x[1] = x[1] >> 2 | (uint64_t)(3 - c) << shift;  // reverse strand
+				if (++l >= k) { // we find a k-mer
+					uint64_t y = x[0] < x[1]? x[0] : x[1];
+					int freq = 	yak_ch_get(h, y);
+					if (freq < 0) freq = 1;
+					fprintf(stdout, "%s\t%d\t%d\n", seqn, i + 2 - k, freq);
+				}
+			} else l = 0, x[0] = x[1] = 0; // if there is an "N", restart
+		}
+	}
+}
+
 #include "ketopt.h"
 
 int main(int argc, char *argv[])
@@ -496,12 +531,14 @@ int main(int argc, char *argv[])
 		fprintf(stderr, "ERROR: -p should be at least %d\n", YAK_COUNTER_BITS);
 		return 1;
 	}
-	h = yak_count_file(argv[o.ind], argc - o.ind >= 2? argv[o.ind+1] : argv[o.ind], &opt);
+	char *fa = argv[o.ind];
+	h = yak_count_file(fa, argc - o.ind >= 2? argv[o.ind+1] : argv[o.ind], &opt);
 	fprintf(stderr, "[M::%s] %ld distinct k-mers after shrinking\n", __func__, (long)h->tot);
-	int i;
-	int64_t cnt[YAK_N_COUNTS];
-	yak_ch_hist(h, cnt, opt.n_thread);
-	for (i = 1; i < YAK_N_COUNTS; ++i) printf("%d\t%lld\n", i, (long long)cnt[i]);
+	prnt_kcnt4seq(fa, h, opt.k); // print k-mers in $seq to linear buffer $buf
+	/*int i;*/
+	/*int64_t cnt[YAK_N_COUNTS];*/
+	/*yak_ch_hist(h, cnt, opt.n_thread);*/
+	/*for (i = 1; i < YAK_N_COUNTS; ++i) printf("%d\t%lld\n", i, (long long)cnt[i]);*/
 	yak_ch_destroy(h);
 	return 0;
 }
