@@ -29,6 +29,7 @@ typedef struct {
 	int32_t pre;
 	int32_t n_thread;
 	int64_t chunk_size;
+	int32_t canonical;
 } yak_copt_t;
 
 typedef struct {
@@ -318,6 +319,7 @@ void yak_copt_init(yak_copt_t *o)
 	o->bf_shift = 0;
 	o->bf_n_hash = 4;
 	o->k = 31;
+	o->canonical = 1;
 	o->pre = 10;
 	o->n_thread = 4;
 	o->chunk_size = 10000000;
@@ -340,17 +342,21 @@ static inline void ch_insert_buf(ch_buf_t *buf, int p, uint64_t y) // insert a k
 	b->a[b->n++] = y;
 }
 
-static void count_seq_buf(ch_buf_t *buf, int k, int p, int len, const char *seq) // insert k-mers in $seq to linear buffer $buf
+static void count_seq_buf(ch_buf_t *buf, int k, int p, int can, int len, const char *seq) // insert k-mers in $seq to linear buffer $buf
 {
 	int i, l;
 	uint64_t x[2], mask = (1ULL<<k*2) - 1, shift = (k - 1) * 2;
 	for (i = l = 0, x[0] = x[1] = 0; i < len; ++i) {
 		int c = seq_nt4_table[(uint8_t)seq[i]];
+		uint64_t y;
 		if (c < 4) { // not an "N" base
 			x[0] = (x[0] << 2 | c) & mask;                  // forward strand
 			x[1] = x[1] >> 2 | (uint64_t)(3 - c) << shift;  // reverse strand
 			if (++l >= k) { // we find a k-mer
-				uint64_t y = x[0] < x[1]? x[0] : x[1];
+				if (can) 
+					y = x[0] < x[1]? x[0] : x[1];
+				else
+					y = x[0];
 				ch_insert_buf(buf, p, yak_hash64(y, mask));
 			}
 		} else l = 0, x[0] = x[1] = 0; // if there is an "N", restart
@@ -416,7 +422,7 @@ static void *worker_pipeline(void *data, int step, void *in) // callback for kt_
 			MALLOC(s->buf[i].a, m);
 		}
 		for (i = 0; i < s->n; ++i) {
-			count_seq_buf(s->buf, p->opt->k, p->opt->pre, s->len[i], s->seq[i]);
+			count_seq_buf(s->buf, p->opt->k, p->opt->pre, p->opt->canonical, s->len[i], s->seq[i]);
 			free(s->seq[i]);
 		}
 		free(s->seq); free(s->len);
@@ -471,7 +477,7 @@ yak_ch_t *yak_count_file(const char *fn1, const char *fn2, const yak_copt_t *opt
 	return h;
 }
 
-int prnt_kcnt4seq(char *fa, const yak_ch_t *h, int k) // print k-mers in $seq to linear buffer $buf
+int prnt_kcnt4seq(char *fa, const yak_ch_t *h, int k, int can) // print k-mers in $seq to linear buffer $buf
 {
 	int i, l;
 	uint64_t x[2], mask = (1ULL<<k*2) - 1, shift = (k - 1) * 2;
@@ -484,11 +490,13 @@ int prnt_kcnt4seq(char *fa, const yak_ch_t *h, int k) // print k-mers in $seq to
 		char *seqn = ks->name.s;
 		for (i = l = 0, x[0] = x[1] = 0; i < len; ++i) {
 			int c = seq_nt4_table[(uint8_t)seq[i]];
+			uint64_t y;
 			if (c < 4) { // not an "N" base
 				x[0] = (x[0] << 2 | c) & mask;                  // forward strand
 				x[1] = x[1] >> 2 | (uint64_t)(3 - c) << shift;  // reverse strand
 				if (++l >= k) { // we find a k-mer
-					uint64_t y = x[0] < x[1]? x[0] : x[1];
+					if (can) y = x[0] < x[1]? x[0] : x[1];
+					else y = x[0];
 					int freq = 	yak_ch_get(h, y);
 					if (freq < 0) freq = 1;
 					fprintf(stdout, "%s\t%d\t%d\n", seqn, i + 2 - k, freq);
@@ -496,6 +504,7 @@ int prnt_kcnt4seq(char *fa, const yak_ch_t *h, int k) // print k-mers in $seq to
 			} else l = 0, x[0] = x[1] = 0; // if there is an "N", restart
 		}
 	}
+	return 0;
 }
 
 #include "ketopt.h"
@@ -511,6 +520,7 @@ int main(int argc, char *argv[])
 		if (c == 'k') opt.k = atoi(o.arg);
 		else if (c == 'p') opt.pre = atoi(o.arg);
 		else if (c == 'K') opt.chunk_size = atoi(o.arg);
+		else if (c == 'c') opt.canonical = 0;
 		else if (c == 't') opt.n_thread = atoi(o.arg);
 		else if (c == 'b') opt.bf_shift = atoi(o.arg);
 		else if (c == 'H') opt.bf_n_hash = atoi(o.arg);
@@ -522,6 +532,7 @@ int main(int argc, char *argv[])
 		fprintf(stderr, "  -p INT     prefix length [%d]\n", opt.pre);
 		fprintf(stderr, "  -b INT     set Bloom filter size to 2**INT bits; 0 to disable [%d]\n", opt.bf_shift);
 		fprintf(stderr, "  -H INT     use INT hash functions for Bloom filter [%d]\n", opt.bf_n_hash);
+		fprintf(stderr, "  -c BOOL    canonical representation [TRUE]\n");
 		fprintf(stderr, "  -t INT     number of worker threads [%d]\n", opt.n_thread);
 		fprintf(stderr, "  -K INT     chunk size [100m]\n");
 		fprintf(stderr, "Note: -b37 is recommended for human reads\n");
@@ -534,7 +545,7 @@ int main(int argc, char *argv[])
 	char *fa = argv[o.ind];
 	h = yak_count_file(fa, argc - o.ind >= 2? argv[o.ind+1] : argv[o.ind], &opt);
 	fprintf(stderr, "[M::%s] %ld distinct k-mers after shrinking\n", __func__, (long)h->tot);
-	prnt_kcnt4seq(fa, h, opt.k); // print k-mers in $seq to linear buffer $buf
+	prnt_kcnt4seq(fa, h, opt.k, opt.canonical); // print k-mers in $seq to linear buffer $buf
 	/*int i;*/
 	/*int64_t cnt[YAK_N_COUNTS];*/
 	/*yak_ch_hist(h, cnt, opt.n_thread);*/
