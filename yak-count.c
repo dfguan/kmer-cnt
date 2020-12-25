@@ -12,7 +12,7 @@
 #include "khashl.h"
 
 #define YAK_MAX_KMER     31
-#define YAK_COUNTER_BITS 10
+#define YAK_COUNTER_BITS 13
 #define YAK_N_COUNTS     (1<<YAK_COUNTER_BITS)
 #define YAK_MAX_COUNT    ((1<<YAK_COUNTER_BITS)-1)
 
@@ -320,7 +320,7 @@ void yak_copt_init(yak_copt_t *o)
 	o->bf_n_hash = 4;
 	o->k = 31;
 	o->canonical = 1;
-	o->pre = 10;
+	o->pre = 13;
 	o->n_thread = 4;
 	o->chunk_size = 10000000;
 }
