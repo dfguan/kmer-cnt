@@ -30,6 +30,8 @@ typedef struct {
 	int32_t n_thread;
 	int64_t chunk_size;
 	int32_t canonical;
+	char    *outf;
+	int32_t prnt_occ;
 } yak_copt_t;
 
 typedef struct {
@@ -323,6 +325,8 @@ void yak_copt_init(yak_copt_t *o)
 	o->pre = 13;
 	o->n_thread = 4;
 	o->chunk_size = 10000000;
+	o->prnt_occ = 0;
+	o->outf = 0;
 }
 
 typedef struct {
@@ -507,6 +511,19 @@ int prnt_kcnt4seq(char *fa, const yak_ch_t *h, int k, int can) // print k-mers i
 	return 0;
 }
 
+int prnt_hist(const yak_ch_t *h, int nthread, char *outf)
+{
+	int i;
+	int64_t cnt[YAK_N_COUNTS];
+	yak_ch_hist(h, cnt, nthread);
+	if (outf== 0 || *outf == 0) outf = "out.hist";
+	FILE *fp = fopen(outf, "w");
+	for (i = 1; i < YAK_N_COUNTS; ++i) fprintf(fp, "%d\t%lld\n", i, (long long)cnt[i]);
+	fclose(fp);
+	return 0;
+}
+
+
 #include "ketopt.h"
 
 int main(int argc, char *argv[])
@@ -516,7 +533,7 @@ int main(int argc, char *argv[])
 	yak_copt_t opt;
 	ketopt_t o = KETOPT_INIT;
 	yak_copt_init(&opt);
-	while ((c = ketopt(&o, argc, argv, 1, "k:p:K:t:cb:H:", 0)) >= 0) {
+	while ((c = ketopt(&o, argc, argv, 1, "k:p:K:t:cb:o:zH:", 0)) >= 0) {
 		if (c == 'k') opt.k = atoi(o.arg);
 		else if (c == 'p') opt.pre = atoi(o.arg);
 		else if (c == 'K') opt.chunk_size = atoi(o.arg);
@@ -524,6 +541,8 @@ int main(int argc, char *argv[])
 		else if (c == 't') opt.n_thread = atoi(o.arg);
 		else if (c == 'b') opt.bf_shift = atoi(o.arg);
 		else if (c == 'H') opt.bf_n_hash = atoi(o.arg);
+		else if (c == 'o') opt.outf = o.arg;
+		else if (c == 'z') opt.prnt_occ = 1;
 	}
 	if (argc - o.ind < 1) {
 		fprintf(stderr, "Usage: yak-count [options] <in.fa> [in.fa]\n");
@@ -535,6 +554,8 @@ int main(int argc, char *argv[])
 		fprintf(stderr, "  -c BOOL    canonical representation [TRUE]\n");
 		fprintf(stderr, "  -t INT     number of worker threads [%d]\n", opt.n_thread);
 		fprintf(stderr, "  -K INT     chunk size [100m]\n");
+		fprintf(stderr, "  -z         print k-mer occurences [FALSE]\n");
+		fprintf(stderr, "  -o FILE    output histogram [out.hist]\n");
 		fprintf(stderr, "Note: -b37 is recommended for human reads\n");
 		return 1;
 	}
@@ -545,11 +566,9 @@ int main(int argc, char *argv[])
 	char *fa = argv[o.ind];
 	h = yak_count_file(fa, argc - o.ind >= 2? argv[o.ind+1] : argv[o.ind], &opt);
 	fprintf(stderr, "[M::%s] %ld distinct k-mers after shrinking\n", __func__, (long)h->tot);
-	prnt_kcnt4seq(fa, h, opt.k, opt.canonical); // print k-mers in $seq to linear buffer $buf
-	/*int i;*/
-	/*int64_t cnt[YAK_N_COUNTS];*/
-	/*yak_ch_hist(h, cnt, opt.n_thread);*/
-	/*for (i = 1; i < YAK_N_COUNTS; ++i) printf("%d\t%lld\n", i, (long long)cnt[i]);*/
+	prnt_hist(h, opt.n_thread, opt.outf);
+	if (opt.prnt_occ)
+		prnt_kcnt4seq(fa, h, opt.k, opt.canonical); // print k-mers in $seq to linear buffer $buf
 	yak_ch_destroy(h);
 	return 0;
 }
